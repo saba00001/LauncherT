@@ -11,7 +11,7 @@ let validTokens = {};
 // ძველი ტოკენების გაწმენდა ყოველ წუთში
 setInterval(() => {
     const now = Date.now();
-    const expireTime = 5 * 60 * 1000; // 5 წუთი
+    const expireTime = 1 * 60 * 1000; // 1 წუთი
     
     Object.keys(validTokens).forEach(token => {
         if (now - validTokens[token].created > expireTime) {
@@ -54,7 +54,7 @@ app.get('/check-token/:token', (req, res) => {
 
         // ვადა ხომ არ გაუვიდა
         const now = Date.now();
-        const isExpired = now - tokenData.created > 5 * 60 * 1000; // 5 წუთი
+        const isExpired = now - tokenData.created > 1 * 60 * 1000; // 1 წუთი
 
         if (isExpired) {
             delete validTokens[token];
