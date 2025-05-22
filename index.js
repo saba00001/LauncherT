@@ -40,48 +40,47 @@ app.get('/get-token', (req, res) => {
 app.get('/check-token/:token', (req, res) => {
     try {
         const { token } = req.params;
-        
+
         if (!token) {
             return res.json({ valid: false, reason: 'No token provided' });
         }
-        
+
         const tokenData = validTokens[token];
-        
+
         if (!tokenData) {
             console.log(`Token ${token} not found`);
             return res.json({ valid: false, reason: 'Token not found' });
         }
-        
-        if (tokenData.used) {
-            console.log(`Token ${token} already used`);
-            return res.json({ valid: false, reason: 'Token already used' });
-        }
-        
-        // ტოკენის ვადის შემოწმება (5 წუთი)
+
+        // ვადა ხომ არ გაუვიდა
         const now = Date.now();
-        if (now - tokenData.created > 5 * 60 * 1000) {
+        const isExpired = now - tokenData.created > 5 * 60 * 1000; // 5 წუთი
+
+        if (isExpired) {
             delete validTokens[token];
             console.log(`Token ${token} expired`);
             return res.json({ valid: false, reason: 'Token expired' });
         }
-        
-        // ტოკენის გამოყენება
-        validTokens[token].used = true;
-        validTokens[token].usedAt = now;
-        
-        console.log(`Token ${token} validated successfully`);
-        res.json({ valid: true });
-        
-        // წაშალე ტოკენი 1 წუთის შემდეგ
-        setTimeout(() => {
-            delete validTokens[token];
-        }, 60 * 1000);
-        
+
+        // თუ უკვე გამოყენებულია, დააბრუნე უარყოფითი პასუხი
+        if (tokenData.used) {
+            console.log(`Token ${token} already used`);
+            return res.json({ valid: false, reason: 'Token already used' });
+        }
+
+        // მონიშნე როგორც გამოყენებული და წაშალე ტოკენი დაუყოვნებლივ
+        tokenData.used = true;
+        delete validTokens[token];
+
+        console.log(`Token ${token} validated and deleted`);
+        return res.json({ valid: true });
+
     } catch (error) {
         console.error('Error checking token:', error);
-        res.status(500).json({ valid: false, reason: 'Server error' });
+        return res.status(500).json({ valid: false, reason: 'Server error' });
     }
 });
+
 
 // ჯანმრთელობის შემოწმება
 app.get('/health', (req, res) => {
