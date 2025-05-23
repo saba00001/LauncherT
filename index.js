@@ -3,8 +3,10 @@ const app = express();
 const crypto = require('crypto');
 const cors = require('cors');
 
+// Body parser for JSON and urlencoded
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 let activeTokens = {};
 let authorizedSerials = {};
@@ -52,6 +54,9 @@ app.get('/get-token', (req, res) => {
 // მოთამაშის ვერიფიკაცია
 app.post('/verify-player', (req, res) => {
     try {
+        // ლოგირება მიღებული ბოდის
+        console.log("[/verify-player] BODY RECEIVED:", req.body);
+
         const { token, serial, name } = req.body;
         console.log(`[VERIFY] Req: token=${token}, serial=${serial}, name=${name}`);
 
