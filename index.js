@@ -56,8 +56,19 @@ app.post('/verify-player', (req, res) => {
     try {
         // ლოგირება მიღებული ბოდის
         console.log("[/verify-player] BODY RECEIVED:", req.body);
+        console.log("[/verify-player] BODY TYPE:", typeof req.body);
+        console.log("[/verify-player] IS ARRAY:", Array.isArray(req.body));
 
-        const { token, serial, name } = req.body;
+        let data;
+        // Check if body is an array (MTA sends it wrapped in array)
+        if (Array.isArray(req.body) && req.body.length > 0) {
+            data = req.body[0]; // Take the first element if it's an array
+            console.log("[/verify-player] Extracted from array:", data);
+        } else {
+            data = req.body; // Use directly if it's an object
+        }
+
+        const { token, serial, name } = data;
         console.log(`[VERIFY] Req: token=${token}, serial=${serial}, name=${name}`);
 
         if (!token || !serial) {
