@@ -16,12 +16,10 @@ setInterval(() => {
     
     Object.keys(activeTokens).forEach(token => {
         if (now - activeTokens[token].created > expireTime) {
-            console.log(`Token ${token} expired and removed`);
             delete activeTokens[token];
         }
     });
-    
-    // serial-ების გაწმენდა (10 წუთში)
+
     Object.keys(authorizedSerials).forEach(serial => {
         if (now - authorizedSerials[serial] > 10 * 60 * 1000) {
             delete authorizedSerials[serial];
@@ -29,108 +27,36 @@ setInterval(() => {
     });
 }, 60 * 1000);
 
-// ტოკენის გენერაცია ლაუნჩერისთვის
+// ტოკენის გენერაცია სერიალით (თუ შესაძლებელია)
 app.get('/get-token', (req, res) => {
     try {
-        const token = crypto.randomBytes(20).toString('hex');
-        const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
-        
-        activeTokens[token] = { 
-            created: Date.now(),
-            ip: clientIP,
-            used: false
-        };
-        
-        console.log(`🎫 Generated token ${token} for IP ${clientIP}`);
-        res.json({ token, expires_in: 120 }); // 2 წუთი
+        // სერიალი შეიძლება გადმოიცეს query-ში (ლაუნჩერიდან გააგზავნე ?serial=...)
+        const playerSerial = req.query.serial;
+        let token;
+
+        // თუ სერიალი გადმოეცა, მოძებნე უკვე არსებული ტოკენი
+        if (playerSerial) {
+            for (const t in activeTokens) {
+                if (activeTokens[t].serial === playerSerial && !activeTokens[t].used) {
+                    token = t;
+                    break;
+                }
+            }
+        }
+
+        // თუ არ მოიძებნა, გენერაცია
+        if (!token) {
+            token = crypto.randomBytes(20).toString('hex');
+            activeTokens[token] = {
+                created: Date.now(),
+                serial: playerSerial || null,
+                ip: req.ip,
+                used: false
+            };
+        }
+
+        res.json({ token, expires_in: 120 });
     } catch (error) {
-        console.error('❌ Error generating token:', error);
         res.status(500).json({ error: 'Failed to generate token' });
     }
-});
-
-// მოთამაშის ვერიფიკაცია სერვერიდან
-app.post('/verify-player', (req, res) => {
-    try {
-        const { token, serial, name } = req.body;
-        
-        if (!token || !serial) {
-            return res.json({ 
-                authorized: false, 
-                reason: 'ტოკენი ან სერიალი არ არის მითითებული' 
-            });
-        }
-        
-        const tokenData = activeTokens[token];
-        
-        if (!tokenData) {
-            console.log(`❌ Token ${token} not found for ${name} (${serial})`);
-            return res.json({ 
-                authorized: false, 
-                reason: 'ტოკენი ვერ მოიძებნა ან ვადა გაუვიდა' 
-            });
-        }
-        
-        // ვადის შემოწმება
-        const now = Date.now();
-        if (now - tokenData.created > 2 * 60 * 1000) {
-            delete activeTokens[token];
-            return res.json({ 
-                authorized: false, 
-                reason: 'ტოკენის ვადა ამოიწურა' 
-            });
-        }
-        
-        // თუ ტოკენი უკვე გამოყენებულია
-        if (tokenData.used) {
-            return res.json({ 
-                authorized: false, 
-                reason: 'ტოკენი უკვე გამოყენებულია' 
-            });
-        }
-        
-        // ავტორიზაცია
-        tokenData.used = true;
-        authorizedSerials[serial] = now;
-        delete activeTokens[token]; // ტოკენის წაშლა
-        
-        console.log(`✅ Player ${name} (${serial}) authorized with token ${token}`);
-        
-        res.json({ 
-            authorized: true,
-            message: 'ავტორიზაცია წარმატებული'
-        });
-        
-    } catch (error) {
-        console.error('❌ Error verifying player:', error);
-        res.status(500).json({ 
-            authorized: false, 
-            reason: 'სერვერის შეცდომა' 
-        });
-    }
-});
-
-// სტატისტიკა
-app.get('/stats', (req, res) => {
-    res.json({
-        active_tokens: Object.keys(activeTokens).length,
-        authorized_serials: Object.keys(authorizedSerials).length,
-        timestamp: new Date().toISOString()
-    });
-});
-
-// ჯანმრთელობის შემოწმება
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'OK',
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString()
-    });
-});
-
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-    console.log(`🚀 Token API running on port ${PORT}`);
-    console.log(`📊 Stats: http://localhost:${PORT}/stats`);
-    console.log(`❤️  Health: http://localhost:${PORT}/health`);
 });
