@@ -15,13 +15,19 @@ setInterval(() => {
     const expireTime = 2 * 60 * 1000; // 2 წუთი
 
     Object.keys(activeTokens).forEach(token => {
-        if (now - activeTokens[token].created > expireTime) {
+        if (
+            activeTokens.hasOwnProperty(token) &&
+            now - activeTokens[token].created > expireTime
+        ) {
             delete activeTokens[token];
         }
     });
 
     Object.keys(authorizedSerials).forEach(serial => {
-        if (now - authorizedSerials[serial] > 10 * 60 * 1000) {
+        if (
+            authorizedSerials.hasOwnProperty(serial) &&
+            now - authorizedSerials[serial] > 10 * 60 * 1000
+        ) {
             delete authorizedSerials[serial];
         }
     });
@@ -38,6 +44,7 @@ app.get('/get-token', (req, res) => {
         };
         res.json({ token, expires_in: 120 });
     } catch (error) {
+        console.error("[/get-token] Error:", error);
         res.status(500).json({ error: 'Failed to generate token' });
     }
 });
@@ -46,26 +53,41 @@ app.get('/get-token', (req, res) => {
 app.post('/verify-player', (req, res) => {
     try {
         const { token, serial, name } = req.body;
+        console.log(`[VERIFY] Req: token=${token}, serial=${serial}, name=${name}`);
+
         if (!token || !serial) {
-            return res.json({ authorized: false, reason: 'ტოკენი ან სერიალი არ არის მითითებული' });
+            console.log(`[VERIFY] ❌ Reject: Token or serial missing`);
+            return res.status(400).json({ authorized: false, reason: 'ტოკენი ან სერიალი არ არის მითითებული' });
         }
+
         const tokenData = activeTokens[token];
         if (!tokenData) {
-            return res.json({ authorized: false, reason: 'ტოკენი ვერ მოიძებნა ან ვადა გაუვიდა' });
+            console.log(`[VERIFY] ❌ Reject: Token not found or expired (${token})`);
+            return res.status(400).json({ authorized: false, reason: 'ტოკენი ვერ მოიძებნა ან ვადა გაუვიდა' });
         }
+
         const now = Date.now();
         if (now - tokenData.created > 2 * 60 * 1000) {
             delete activeTokens[token];
-            return res.json({ authorized: false, reason: 'ტოკენის ვადა ამოიწურა' });
+            console.log(`[VERIFY] ❌ Reject: Token expired (${token})`);
+            return res.status(400).json({ authorized: false, reason: 'ტოკენის ვადა ამოიწურა' });
         }
+
         if (tokenData.used) {
-            return res.json({ authorized: false, reason: 'ტოკენი უკვე გამოყენებულია' });
+            delete activeTokens[token];
+            console.log(`[VERIFY] ❌ Reject: Token already used (${token})`);
+            return res.status(400).json({ authorized: false, reason: 'ტოკენი უკვე გამოყენებულია' });
         }
+
         tokenData.used = true;
         authorizedSerials[serial] = now;
         delete activeTokens[token];
+
+        console.log(`[VERIFY] ✅ Authorized: ${serial} (${name})`);
         res.json({ authorized: true, message: 'ავტორიზაცია წარმატებული' });
+
     } catch (error) {
+        console.error("[/verify-player] Error:", error);
         res.status(500).json({ authorized: false, reason: 'სერვერის შეცდომა' });
     }
 });
