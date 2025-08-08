@@ -1,132 +1,171 @@
-const express = require('express');
+import express from 'express';
+import mysql from 'mysql2/promise';
+import crypto from 'crypto';
+
 const app = express();
-const crypto = require('crypto');
-const cors = require('cors');
-
-// Body parser for JSON and urlencoded
-app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-let activeTokens = {};
-let authorizedSerials = {};
+const config = {
+  launcher_key: 'GENESIS_LAUNCHER_2024_SECURE_KEY_CHANGE_THIS',
+  current_version: '1.3.0',
+  cloudflare_r2_url: 'https://pub-ec17f648d3ea4f508fabfdb6c1fc6518.r2.dev/bin.zip',
+  database: {
+    host: 'sql310.infinityfree.com',
+    user: 'if0_39656209',
+    password: '9k83Rgk3HIBQk10',
+    database: 'if0_39656209_hora',
+  },
+  max_sessions_per_user: 1,
+  maintenance_mode: false,
+};
 
-// გაწმენდა ძველი ტოკენების და სერიალების
-setInterval(() => {
-    const now = Date.now();
-    const expireTime = 2 * 60 * 1000; // 2 წუთი
+// DB კავშირი
+let pool = mysql.createPool({
+  host: config.database.host,
+  user: config.database.user,
+  password: config.database.password,
+  database: config.database.database,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+});
 
-    Object.keys(activeTokens).forEach(token => {
-        if (
-            activeTokens.hasOwnProperty(token) &&
-            now - activeTokens[token].created > expireTime
-        ) {
-            delete activeTokens[token];
-        }
+// დამოწმება უსაფრთხო შედარებით
+function verifyLauncherKey(providedKey) {
+  if (!providedKey) return false;
+  return crypto.timingSafeEqual(Buffer.from(config.launcher_key), Buffer.from(providedKey));
+}
+
+// IP აღება Express-ში
+function getClientIP(req) {
+  return (
+    req.headers['cf-connecting-ip'] ||
+    req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+    req.socket.remoteAddress ||
+    'unknown'
+  );
+}
+
+// API Endpoint: /status
+app.get(['/','/status'], async (req, res) => {
+  if (config.maintenance_mode) {
+    return res.status(503).json({
+      error: 'Server maintenance',
+      message: 'სერვერი ტექნიკურ მომსახურებაშია. სცადეთ მოგვიანებით.',
+      retry_after: 3600
     });
-
-    Object.keys(authorizedSerials).forEach(serial => {
-        if (
-            authorizedSerials.hasOwnProperty(serial) &&
-            now - authorizedSerials[serial] > 10 * 60 * 1000
-        ) {
-            delete authorizedSerials[serial];
-        }
+  }
+  
+  try {
+    const [rows] = await pool.query("SELECT COUNT(*) AS count FROM active_sessions WHERE created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)");
+    const activePlayers = rows[0].count || 0;
+    
+    return res.json({
+      status: 'online',
+      version: config.current_version,
+      database: 'connected',
+      active_players: activePlayers,
+      timestamp: Date.now(),
+      server_time: new Date().toISOString()
     });
-}, 60 * 1000);
+  } catch (e) {
+    console.error('Status check failed:', e);
+    return res.status(500).json({status: 'error', message: 'Internal server error'});
+  }
+});
 
-// უნიკალური ტოკენის გენერაცია
-app.get('/get-token', (req, res) => {
-    try {
-        const token = crypto.randomBytes(20).toString('hex');
-        activeTokens[token] = {
-            created: Date.now(),
-            ip: req.ip,
-            used: false
-        };
-        res.json({ token, expires_in: 120 });
-    } catch (error) {
-        console.error("[/get-token] Error:", error);
-        res.status(500).json({ error: 'Failed to generate token' });
+// API Endpoint: /version
+app.get('/version', (req, res) => {
+  res.json({
+    version: config.current_version,
+    download_url: config.cloudflare_r2_url,
+    changelog: {
+      '1.3.0': 'უსაფრთხოების გაუმჯობესება, ახალი ფუნქციები',
+      '1.2.0': 'ბუგების გასწორება, გამოსახულების გაუმჯობესება',
+      '1.1.0': 'ანტი-ჩიტ სისტემის დამატება'
     }
+  });
 });
 
-// მოთამაშის ვერიფიკაცია
-app.post('/verify-player', (req, res) => {
-    try {
-        // ლოგირება მიღებული ბოდის
-        console.log("[/verify-player] BODY RECEIVED:", req.body);
-        console.log("[/verify-player] BODY TYPE:", typeof req.body);
-        console.log("[/verify-player] IS ARRAY:", Array.isArray(req.body));
+// API Endpoint: /download
+app.get('/download', (req, res) => {
+  const launcherKey = req.header('X-Launcher-Key');
+  if (!verifyLauncherKey(launcherKey)) {
+    return res.status(401).json({error: 'Invalid launcher key'});
+  }
+  res.redirect(config.cloudflare_r2_url);
+});
 
-        let data;
-        // Check if body is an array (MTA sends it wrapped in array)
-        if (Array.isArray(req.body) && req.body.length > 0) {
-            data = req.body[0]; // Take the first element if it's an array
-            console.log("[/verify-player] Extracted from array:", data);
-        } else {
-            data = req.body; // Use directly if it's an object
-        }
-
-        const { token, serial, name } = data;
-        console.log(`[VERIFY] Req: token=${token}, serial=${serial}, name=${name}`);
-
-        if (!token || !serial) {
-            console.log(`[VERIFY] ❌ Reject: Token or serial missing`);
-            return res.status(400).json({ authorized: false, reason: 'ტოკენი ან სერიალი არ არის მითითებული' });
-        }
-
-        const tokenData = activeTokens[token];
-        if (!tokenData) {
-            console.log(`[VERIFY] ❌ Reject: Token not found or expired (${token})`);
-            return res.status(400).json({ authorized: false, reason: 'ტოკენი ვერ მოიძებნა ან ვადა გაუვიდა' });
-        }
-
-        const now = Date.now();
-        if (now - tokenData.created > 2 * 60 * 1000) {
-            delete activeTokens[token];
-            console.log(`[VERIFY] ❌ Reject: Token expired (${token})`);
-            return res.status(400).json({ authorized: false, reason: 'ტოკენის ვადა ამოიწურა' });
-        }
-
-        if (tokenData.used) {
-            delete activeTokens[token];
-            console.log(`[VERIFY] ❌ Reject: Token already used (${token})`);
-            return res.status(400).json({ authorized: false, reason: 'ტოკენი უკვე გამოყენებულია' });
-        }
-
-        tokenData.used = true;
-        authorizedSerials[serial] = now;
-        delete activeTokens[token];
-
-        console.log(`[VERIFY] ✅ Authorized: ${serial} (${name})`);
-        res.json({ authorized: true, message: 'ავტორიზაცია წარმატებული' });
-
-    } catch (error) {
-        console.error("[/verify-player] Error:", error);
-        res.status(500).json({ authorized: false, reason: 'სერვერის შეცდომა' });
+// API Endpoint: /auth
+app.post('/auth', async (req, res) => {
+  const launcherKey = req.header('X-Launcher-Key');
+  if (!verifyLauncherKey(launcherKey)) {
+    return res.status(401).json({error: 'Invalid launcher key'});
+  }
+  
+  const { nickname, launcher_key: clientLauncherKey, version, hardware_id: hwid } = req.body;
+  
+  if (!nickname || typeof nickname !== 'string' || nickname.length < 3 || nickname.length > 24) {
+    return res.status(400).json({error: 'Nickname must be 3-24 characters'});
+  }
+  if (!/^[a-zA-Z0-9_\[\]]+$/.test(nickname)) {
+    return res.status(400).json({error: 'Invalid nickname characters. Only letters, numbers, _ [ ] allowed'});
+  }
+  if (version !== config.current_version) {
+    return res.status(409).json({error: 'Version mismatch', required_version: config.current_version, your_version: version});
+  }
+  
+  try {
+    const connection = await pool.getConnection();
+    const ip = getClientIP(req);
+    
+    // გადამოწმება აქტიური სესიების
+    const [activeSessionsRows] = await connection.query(
+      "SELECT COUNT(*) AS count FROM active_sessions WHERE nickname = ? AND created_at > DATE_SUB(NOW(), INTERVAL 2 HOUR)",
+      [nickname]
+    );
+    if (activeSessionsRows[0].count >= config.max_sessions_per_user) {
+      connection.release();
+      return res.status(409).json({error: 'Already connected. Please wait 2 hours or contact admin.'});
     }
-});
-
-// სტატისტიკა
-app.get('/stats', (req, res) => {
-    res.json({
-        active_tokens: Object.keys(activeTokens).length,
-        authorized_serials: Object.keys(authorizedSerials).length,
-        timestamp: new Date().toISOString()
+    
+    // ძველი სესიების წაშლა
+    await connection.query("DELETE FROM active_sessions WHERE created_at < DATE_SUB(NOW(), INTERVAL 6 HOUR)");
+    
+    // მოთამაშის დამატება ან განახლება
+    await connection.query(`
+      INSERT INTO players (nickname, launcher_key, last_login, ip_address, hardware_id)
+      VALUES (?, ?, NOW(), ?, ?)
+      ON DUPLICATE KEY UPDATE last_login = NOW(), ip_address = ?, hardware_id = ?
+    `, [nickname, clientLauncherKey, ip, hwid, ip, hwid]);
+    
+    // სესიის გენერაცია
+    const sessionToken = crypto.randomBytes(32).toString('hex');
+    
+    await connection.query(`
+      INSERT INTO active_sessions (nickname, session_token, created_at, ip_address)
+      VALUES (?, ?, NOW(), ?)
+      ON DUPLICATE KEY UPDATE session_token = ?, created_at = NOW(), ip_address = ?
+    `, [nickname, sessionToken, ip, sessionToken, ip]);
+    
+    connection.release();
+    
+    return res.json({
+      success: true,
+      session_token: sessionToken,
+      message: 'Authorization successful',
+      server_time: new Date().toISOString()
     });
+    
+  } catch (e) {
+    console.error('Auth error:', e);
+    return res.status(500).json({error: 'Authentication service unavailable'});
+  }
 });
 
-// ჯანმრთელობის შემოწმება
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'OK',
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString()
-    });
-});
+// სხვა Endpoints ასევე შეიძლება მსგავსად გადმოვიტანოთ
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-    console.log(`🚀 Token API running on port ${PORT}`);
+// სერვერი 3000 პორტზე
+app.listen(3000, () => {
+  console.log('Genesis Launcher API is running on port 3000');
 });
